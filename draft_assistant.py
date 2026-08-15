@@ -16,6 +16,7 @@ import os
 import re
 import sys
 import time
+import urllib.error
 import urllib.request
 
 SLEEPER_API = "https://api.sleeper.app/v1"
@@ -61,7 +62,7 @@ def display_name(player):
 def name_aliases(player):
     """All the ways a rankings CSV might spell this player's name."""
     if player.get("position") != "DEF":
-        return [display_name(player)]
+        return [a for a in [display_name(player)] if a]
     first, last = player.get("first_name"), player.get("last_name")
     team = player.get("team")
     aliases = [display_name(player)]
@@ -169,7 +170,8 @@ def main():
     my_slot = (draft.get("draft_order") or {}).get(user_id)
     my_pick_set = set(snake_pick_numbers(my_slot, num_teams, rounds)) if my_slot else set()
     if not my_slot:
-        print("Note: couldn't find your slot in the draft order yet - on-the-clock alerts will be skipped.")
+        print("Note: couldn't find your slot in the draft order yet - on-the-clock alerts will be skipped "
+              "until the order is set.")
 
     players = load_players()
     rankings = load_rankings(args.rankings_csv)
@@ -200,8 +202,20 @@ def main():
     print("Watching draft... (Ctrl+C to stop)\n")
 
     while True:
-        draft = api_get(f"/draft/{args.draft_id}")
-        picks = api_get(f"/draft/{args.draft_id}/picks")
+        try:
+            draft = api_get(f"/draft/{args.draft_id}")
+            picks = api_get(f"/draft/{args.draft_id}/picks")
+        except (urllib.error.URLError, json.JSONDecodeError) as e:
+            print(f"Warning: couldn't reach Sleeper ({e}); retrying in {args.poll_seconds}s...")
+            time.sleep(args.poll_seconds)
+            continue
+
+        if my_slot is None:
+            my_slot = (draft.get("draft_order") or {}).get(user_id)
+            if my_slot:
+                my_pick_set = set(snake_pick_numbers(my_slot, num_teams, rounds))
+                print(f"Found your draft slot ({my_slot}) - on-the-clock alerts are now active.")
+
         drafted_ids = {p["player_id"] for p in picks}
         new_picks = sorted((p for p in picks if p["pick_no"] not in seen_picks), key=lambda x: x["pick_no"])
 
